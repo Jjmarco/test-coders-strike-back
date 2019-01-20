@@ -2,16 +2,20 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <cmath>
 
 using namespace std;
 
-/**
- * Auto-generated code below aims at helping you parse
- * the standard input according to the problem statement.
- **/
+
 int main()
 {
-
+    constexpr int maxThrust = 100;
+    constexpr int boostDistThresh = 7200; // 12 * rayon d'un checkpoint
+    constexpr int boostAngleTolerance = 10;
+    
+    int thrust = maxThrust;
+    bool boost = false, boostInUse = false, boostUsed = false;
+    
     // game loop
     while (1) {
         int x;
@@ -24,17 +28,28 @@ int main()
         int opponentX;
         int opponentY;
         cin >> opponentX >> opponentY; cin.ignore();
-        int thrust = 100;
-        // Write an action using cout. DON'T FORGET THE "<< endl"
-        // To debug: cerr << "Debug messages..." << endl;
-        if(nextCheckpointAngle > 90 || nextCheckpointAngle < -90)
-            thrust = 0;
-        else
-            thrust = 100;
+        
+        // ralenti aux virages
+        thrust = (nextCheckpointAngle > 90 || nextCheckpointAngle < -90) ? 0 : maxThrust;
+        // active le boost sur une ligne droite et si le checkpoint est assez loin pour éviter les dérapages
+        boost = nextCheckpointDist > boostDistThresh
+              && abs(nextCheckpointAngle) < boostAngleTolerance;
 
         // You have to output the target position
         // followed by the power (0 <= thrust <= 100)
         // i.e.: "x y thrust"
-        cout << nextCheckpointX << " " << nextCheckpointY << " " << thrust << endl;
+        cout << nextCheckpointX << " " << nextCheckpointY << " ";
+        if(boost && !boostUsed)
+        {
+            cout << "BOOST";
+            boostInUse = true;
+        }
+        else
+        {
+            cout << thrust;
+            if(boostInUse) boostUsed = true;
+            boostInUse = false;
+        }
+        cout << endl;
     }
 }
