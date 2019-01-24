@@ -6,50 +6,88 @@
 
 using namespace std;
 
+class Vector {
+public:
+    double x, y;
+    Vector(double x, double y) : x(x), y(y) {}
+    Vector(Vector &o) : x(o.x), y(o.y) {}
+    
+    double norm() {
+        return sqrt(x*x + y*y);
+    }
+    
+    void normalize() {
+        double n = norm();
+        x /= n;
+        y /= n;
+    }
+    
+    double dot(Vector &o) {
+        return x*o.x + y*o.y;
+    }
+};
 
 int main()
 {
     constexpr int maxThrust = 100;
-    constexpr int boostDistThresh = 7200; // 12 * rayon d'un checkpoint
-    constexpr int boostAngleTolerance = 10;
+    constexpr int boostDistThresh = 5000;
+    constexpr int boostAngleTolerance = 7;
     
-    int thrust = maxThrust;
+    int x, y;
+    int nextCheckpointX, nextCheckpointY;
+    int nextCheckpointDist;
+    int nextCheckpointAngle;
+    int opponentX, opponentY;
+    
+    int newThrust = 0;
     bool boost = false, boostInUse = false, boostUsed = false;
+    int distToOpponent = 0;
     
-    // game loop
-    while (1) {
-        int x;
-        int y;
-        int nextCheckpointX; // x position of the next check point
-        int nextCheckpointY; // y position of the next check point
-        int nextCheckpointDist; // distance to the next checkpoint
-        int nextCheckpointAngle; // angle between your pod orientation and the direction of the next checkpoint
-        cin >> x >> y >> nextCheckpointX >> nextCheckpointY >> nextCheckpointDist >> nextCheckpointAngle; cin.ignore();
-        int opponentX;
-        int opponentY;
-        cin >> opponentX >> opponentY; cin.ignore();
+    while (true) {
+        /* --- Entrée --- */
+        cin >> x >> y
+            >> nextCheckpointX >> nextCheckpointY
+            >> nextCheckpointDist
+            >> nextCheckpointAngle
+            >> opponentX >> opponentY;
+        cin.ignore();
         
-        // ralenti aux virages
-        thrust = (nextCheckpointAngle > 90 || nextCheckpointAngle < -90) ? 0 : maxThrust;
+        /* --- Calcule des nouveaux paramètres --- */
+        
+        // Calcule la poussée en fonction de l'angle entre le sens du mouvement et le checkpoint
+        newThrust = (int)min((double)maxThrust, .08*nextCheckpointDist*max(0.0, cos(M_PI*nextCheckpointAngle/180)));
+        
+        Vector podToChkp(nextCheckpointX - x, nextCheckpointY - y),
+            podToOpp(opponentX - x, opponentY - y);
+        distToOpponent = podToOpp.norm();
+        if(distToOpponent < 1000) {
+            podToChkp.normalize();
+            podToOpp.normalize();
+            // Calcule le cosinus de l'angle entre le vecteur Pod->Checkpoint et le vecteur Pod->Adversaire
+            // Si l'ennemi est dans une zone proche à l'arrière du pod, le pod ralenti afin de tenter de le ralentir
+            if(podToChkp.dot(podToOpp) < 0)
+                newThrust = 25;
+        }
+        
         // active le boost sur une ligne droite et si le checkpoint est assez loin pour éviter les dérapages
         boost = nextCheckpointDist > boostDistThresh
               && abs(nextCheckpointAngle) < boostAngleTolerance;
-
-        // You have to output the target position
-        // followed by the power (0 <= thrust <= 100)
-        // i.e.: "x y thrust"
-        cout << nextCheckpointX << " " << nextCheckpointY << " ";
+              
+        string thrustCmd;
         if(boost && !boostUsed)
         {
-            cout << "BOOST";
+            thrustCmd = "BOOST";
             boostInUse = true;
         }
         else
         {
-            cout << thrust;
+            thrustCmd = to_string(newThrust);
             if(boostInUse) boostUsed = true;
             boostInUse = false;
         }
-        cout << endl;
+        
+        /* --- Sortie --- */
+        
+        cout << nextCheckpointX << " " << nextCheckpointY << " " << thrustCmd << endl;
     }
 }
