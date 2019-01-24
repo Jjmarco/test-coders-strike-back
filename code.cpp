@@ -10,8 +10,22 @@ class Vector {
 public:
     double x, y;
     Vector(double x, double y) : x(x), y(y) {}
-    Vector(Vector &o) : x(o.x), y(o.y) {}
+    Vector() : Vector(0., 0.) {}
+    Vector(Vector &o) : Vector(o.x, o.y) {}
     
+    void set(double _x, double _y) {
+        x = _x;
+        y = _y;
+    }
+    
+    void set(int _x, int _y) {
+        x = _x;
+        y = _y;
+    }
+    
+    void set(Vector &o) {
+        set(o.x, o.y);
+    }
     double norm() {
         return sqrt(x*x + y*y);
     }
@@ -41,7 +55,8 @@ int main()
     
     int newThrust = 0;
     bool boost = false, boostInUse = false, boostUsed = false;
-    int distToOpponent = 0;
+    
+    Vector podToChkp, podToOpp;
     
     while (true) {
         /* --- Entrée --- */
@@ -55,18 +70,17 @@ int main()
         /* --- Calcule des nouveaux paramètres --- */
         
         // Calcule la poussée en fonction de l'angle entre le sens du mouvement et le checkpoint
-        newThrust = (int)min((double)maxThrust, .08*nextCheckpointDist*max(0.0, cos(M_PI*nextCheckpointAngle/180)));
+        newThrust = min(maxThrust, max(0, (int)(.09*nextCheckpointDist*cos(M_PI*nextCheckpointAngle/180))));
         
-        Vector podToChkp(nextCheckpointX - x, nextCheckpointY - y),
-            podToOpp(opponentX - x, opponentY - y);
-        distToOpponent = podToOpp.norm();
-        if(distToOpponent < 1000) {
+        podToChkp.set(nextCheckpointX - x, nextCheckpointY - y);
+        podToOpp.set(opponentX - x, opponentY - y);
+        if(podToOpp.norm() < 1100) {
             podToChkp.normalize();
             podToOpp.normalize();
             // Calcule le cosinus de l'angle entre le vecteur Pod->Checkpoint et le vecteur Pod->Adversaire
             // Si l'ennemi est dans une zone proche à l'arrière du pod, le pod ralenti afin de tenter de le ralentir
             if(podToChkp.dot(podToOpp) < 0)
-                newThrust = 25;
+                newThrust *= .3;
         }
         
         // active le boost sur une ligne droite et si le checkpoint est assez loin pour éviter les dérapages
