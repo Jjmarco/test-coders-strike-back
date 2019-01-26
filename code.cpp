@@ -11,12 +11,50 @@ class Map;
 class Checkpoint;
 class Pod;
 
+double radToDeg(double rad) {
+    return 180*rad/M_PI;
+}
+
+double degToRad(double deg) {
+    return M_PI*deg/180;   
+}
+
+class Point {
+protected:
+    int x, y;
+    
+public:
+    Point(int x, int y) : x(x), y(y) {}
+    Point() : Point(0, 0) {}
+    
+    int X() const {
+        return x;   
+    }
+    
+    int Y() const {
+        return y;   
+    }
+    
+    // Calcul le distance au carré sans racine (plus rapide)
+    int distanceSq(const Point& o) const {
+        int dx = o.x - x,
+            dy = o.y - y;
+        return dx*dx + dy*dy;
+    }
+    
+    // Applique la racine carrée pour avoir la distance réelle si nécessaire
+    int distance(const Point& o) const {
+        return sqrt(distanceSq(o));
+    }
+};
+
 class Vector {
 public:
     double x, y;
     Vector(double x, double y) : x(x), y(y) {}
     Vector() : Vector(0., 0.) {}
     Vector(const Vector& o) : Vector(o.x, o.y) {}
+    Vector(const Point& p1, const Point& p2) : Vector(p2.X() - p1.X(), p2.Y() - p1.Y()) {}
     
     void set(double _x, double _y) {
         x = _x;
@@ -48,7 +86,7 @@ public:
         return v;
     }
     
-    void add(Vector& o) {
+    void add(const Vector& o) {
         x += o.x;
         y += o.y;
     }
@@ -58,34 +96,81 @@ public:
         y *= s;
     }
     
+    bool isNull() const {
+        return x == 0 && y == 0;   
+    }
+    
     double dot(const Vector& o) const {
         return x*o.x + y*o.y;
+    }
+    
+    Vector& operator*=(double s) {
+        this->scalar(s);
+        return *this;   
+    }
+    
+    Vector& operator+=(const Vector& o) {
+        this->add(o);
+        return *this;   
+    }
+    
+    Vector& operator-=(const Vector& o) {
+        x -= o.x;
+        y -= o.y;
+        return *this;   
     }
 };
 
 Vector operator+(const Vector& u, const Vector& v) {
-    return Vector(u.x + v.x, u.y + v.y);
+    Vector res(u);
+    res += v;
+    return res;
 }
 
 Vector operator*(double s, const Vector& u) {
-    return Vector(s*u.x, s*u.y);
+    Vector res(u);
+    res *= s;
+    return res;
 }
 
 Vector operator-(const Vector& u, const Vector& v) {
-    return operator+(u, -1*v);
+    return u + (-1*v);
 }
 
-class Checkpoint {
-private:
-    Vector pos;
-
+class Entity : public Point {
+protected:
+    int radius;
+    int vx, vy;
 public:
-    Checkpoint(int x, int y) : pos(x, y) {}
-    Checkpoint() : Checkpoint(0, 0) {}
+    Entity(int x, int y, int radius) : Point(x, y), radius(radius), vx(0), vy(0) {}
+    Entity() : Entity(0, 0, 0) {}
     
-    const Vector& getPos() const {
-        return pos;
+    void applySpeed() {
+        x += vx;
+        y += vy;
+        // Application de la friction
+        vx *= .85;
+        vy *= .85;
     }
+    
+    static bool predictCollision(const Entity& e1, const Entity& e2, int turns) {
+        Entity e1_c(e1),
+               e2_c(e2);
+        for(int i = 0; i < turns; i++)
+        {
+            e1_c.applySpeed();
+            e2_c.applySpeed();
+            if(e1_c.distance(e2_c) <= e1_c.radius + e2_c.radius)
+                return true;
+        }
+        return false;
+    }
+};
+
+class Checkpoint : public Entity {
+public:
+    Checkpoint(int x, int y) : Entity(x, y, checkpointRadius) {}
+    Checkpoint() : Checkpoint(0, 0) {}
     
     static constexpr int checkpointRadius = 600;
 };
@@ -160,25 +245,42 @@ public:
 
 Map* Map::instance = nullptr;
 
-class Pod {
+class Pod : public Entity {
 private:
-    int x, y,
-        vx, vy,
-        angle, 
-        nextCheckPointId;
+    int angle, 
+        nextCheckPointId,
+        lastCheckPointId,
+        checkpointsPassed;
         
     bool boostUsed;
         
     Pod *buddy;
         
 public:
-    Pod() : x(0), y(0),
-            vx(0), vy(0),
+    static constexpr int forcefieldRadius = 400;
+    static constexpr double slowdownMult = .0833;
+    static constexpr int BOOST = -1, SHIELD = -2;
+    static constexpr int RACE = 0, ATTACK = 1;
+    static constexpr double anticipationFactor = 5, compensationFactor = 3;
+
+    Pod() : Entity(0, 0, forcefieldRadius),
             angle(0),
             nextCheckPointId(0),
             boostUsed(false),
             buddy(nullptr)
-            {}
+            {
+                lastCheckPointId = 0;
+                checkpointsPassed = 0;
+            }
+            
+    bool isAhead(const Pod& other) const {
+        const Checkpoint& nextCheckpointPod = Map::getInstance()->getCheckpoint(nextCheckPointId);
+        const Checkpoint& nextCheckpointOther = Map::getInstance()->getCheckpoint(other.nextCheckPointId);
+        
+        if(checkpointsPassed == other.checkpointsPassed)
+            return this->distanceSq(nextCheckpointPod) < other.distanceSq(nextCheckpointOther);
+        return checkpointsPassed > other.checkpointsPassed;
+    }
     
     void input(int _x, int _y, int _vx, int _vy, int _angle, int _nextCheckPointId, Pod* _buddy) {
         x = _x;
@@ -186,34 +288,83 @@ public:
         vx = _vx;
         vy = _vy;
         angle = _angle;
+        
+        if(_nextCheckPointId != nextCheckPointId)
+        {
+            checkpointsPassed++;
+            lastCheckPointId = nextCheckPointId;
+        }
+        
         nextCheckPointId = _nextCheckPointId;
         buddy = _buddy;
     }
     
-    void computeNextParams(int* targetX, int* targetY, string* thrustCmd) {
-        Vector pos(x, y), v(vx, vy), posToChkpt, target, posToAlly, posToAfter;
+    void computeNextParams(int* targetX, int* targetY, string* thrustCmd, int behavior) {
+        Map *map = Map::getInstance();
+        Pod opp1 = *map->getOpponent1(),
+            opp2 = *map->getOpponent2();
+        Vector v(vx, vy), posToChkpt, target, posToAlly;
+        int distToChkpt, thrust = 0;
         
-        const Checkpoint& nextCheckpoint = Map::getInstance()->getCheckpoint(nextCheckPointId);
+        const Checkpoint& nextCheckpoint = map->getCheckpoint(nextCheckPointId);
         
-        posToChkpt.set(nextCheckpoint.getPos().x - pos.x, nextCheckpoint.getPos().y - pos.y);
-        int distToChkpt = posToChkpt.norm();
+        posToChkpt = Vector(*this, nextCheckpoint);
+        distToChkpt = posToChkpt.norm();
         
-        // Calcul de la nouvelle propulsion
-        int thrust = min(100, (int)(slowdownMult*distToChkpt));
+        if(behavior == RACE) {
+            // Anticipation du prochain checkpoint (sauf si checkpoint d'arrivée)
+            if(distToChkpt < anticipationFactor*v.norm()
+            && this->checkpointsPassed + 1 < 3*map->getCheckpointCount()) {
+                int chkptAfterId = (nextCheckPointId + 1) % map->getCheckpointCount();
+                target = Vector(*this, map->getCheckpoint(chkptAfterId));
+            }
+            else target = posToChkpt;
+            // Compensation du déparage
+            target -= compensationFactor*v;
         
-        // Compensation du déparage
-        target = posToChkpt - 4*v;
+            // Si une collision est iminente entre le pod et un ennemi,
+            // et l'ennemi se trouve sur les côtés du pod, le pod active son bouclier
+            // pour tenter se défendre d'une collsion ou pousser l'ennemi
+            Vector posToOpp(0, 0);
+            if(predictCollision(*this, opp1, 1))
+                posToOpp = Vector(*this, opp1);
+            else if(predictCollision(*this, opp2, 1))
+                posToOpp = Vector(*this, opp2);
+            if(!posToOpp.isNull())
+            {
+                double distToOpp = posToOpp.norm(), distToTarget = target.norm();
+                double cosOppTarget = posToOpp.dot(target)/(distToOpp*distToTarget);
+                if(cosOppTarget < .5 && cosOppTarget > -.5)
+                    thrust = SHIELD;
+            }
+        }
+        else if(behavior == ATTACK) {
+            // Le pod d'attaque vise le pod ennemi en tête afin de tenter de le ralentir par des collisions
+            if(opp2.isAhead(opp1))
+                target = Vector(*this, opp2) + 3*compensationFactor*Vector(opp2.vx, opp2.vy);
+            else
+                target = Vector(*this, opp1) + 3*compensationFactor*Vector(opp1.vx, opp1.vy);
+            
+            // Activation du bouclier si prédiction de collision iminente
+            if(predictCollision(*this, opp1, 1) || predictCollision(*this, opp2, 1))
+                thrust = SHIELD;
+        }
         
-        // Anticipation du prochain checkpoint
-        if(distToChkpt < 4*v.norm()) {
-            int chkptAfterId = (nextCheckPointId + 1) % Map::getInstance()->getCheckpointCount();
-            const Checkpoint& checkpointAfter = Map::getInstance()->getCheckpoint(chkptAfterId);
-            posToAfter.set(checkpointAfter.getPos().x - pos.x, checkpointAfter.getPos().y - pos.y);
-            target = posToAfter - 4*v;
+        // Calcul de l'angle entre le pod et la cible
+        if(!thrust) {
+            double angleTargetH = radToDeg(acos(target.x / target.norm()));
+            if(target.y < 0) angleTargetH = 360. - angleTargetH;
+            if(angle <= angleTargetH) angleTargetH = angleTargetH - angle;
+            else                      angleTargetH = 360. - angle + angleTargetH;
+            // Calcul de la nouvelle propulsion
+            if(cos(degToRad(angleTargetH)) < -.1)
+                thrust = 0;
+            else
+                thrust = min(100, max(0, (int)(slowdownMult*distToChkpt)));
         }
         
         // Vérification de la position du pod allié
-        posToAlly.set(buddy->getPos().x - pos.x, buddy->getPos().y - pos.y);
+        posToAlly = Vector(*this, *buddy);
         double distToAlly = posToAlly.norm(), distToTarget = target.norm();
         double cosAllyTarget = posToAlly.dot(target)/(distToAlly*distToTarget);
         if(distToAlly < 2*forcefieldRadius + 300 && cosAllyTarget > .5)
@@ -221,24 +372,32 @@ public:
             thrust *= .25;
         }
         
-        // Activation du boost
-        if(!boostUsed && distToChkpt > 4000) {
-            thrust = -1;
+        /* Activation du boost si:
+         * - Le pod est à une certaine distance du prochain checkpoint
+         * - Pas de collison iminente avec un autre pod
+         */
+        if(behavior != ATTACK && !boostUsed && distToChkpt > 4000
+        && !predictCollision(*this, *map->getOpponent1(), 1)
+        && !predictCollision(*this, *map->getOpponent2(), 1)
+        && !predictCollision(*this, *buddy, 1)) {
+            thrust = BOOST;
             boostUsed = true;
         }
         
         // Ecriture des nouveaux paramètres
-        *targetX = target.x + pos.x;
-        *targetY = target.y + pos.y;
-        *thrustCmd = thrust == -1 ? "BOOST" : to_string(thrust);
+        *targetX = target.x + x;
+        *targetY = target.y + y;
+        switch(thrust) {
+        case BOOST:
+            *thrustCmd = "BOOST";
+            break;
+        case SHIELD:
+            *thrustCmd = "SHIELD";
+            break;
+        default:
+            *thrustCmd = to_string(thrust);
+        }
     }
-    
-    Vector getPos() const {
-        return Vector(x, y);   
-    }
-    
-    static constexpr int forcefieldRadius = 400;
-    static constexpr double slowdownMult = .0833;
 };
 
 
@@ -282,14 +441,15 @@ int main()
             int angle2; // angle of the opponent's pod
             int nextCheckPointId2; // next check point id of the opponent's pod
             cin >> x2 >> y2 >> vx2 >> vy2 >> angle2 >> nextCheckPointId2; cin.ignore();
+            opps[i].input(x2, y2, vx2, vy2, angle2, nextCheckPointId2, &opps[1-i]);
         } 
 
         int targetX, targetY;
         string thrust;
         
-        pods[0].computeNextParams(&targetX, &targetY, &thrust);
+        pods[0].computeNextParams(&targetX, &targetY, &thrust, Pod::RACE);
         cout << targetX << " " << targetY << " " << thrust << endl;
-        pods[1].computeNextParams(&targetX, &targetY, &thrust);
+        pods[1].computeNextParams(&targetX, &targetY, &thrust, Pod::ATTACK);
         cout << targetX << " " << targetY << " " << thrust << endl;
     }
     
