@@ -6,6 +6,7 @@
 
 using namespace std;
 
+class Point;
 class Vector;
 class Map;
 class Checkpoint;
@@ -75,6 +76,7 @@ public:
     }
     
     void normalize() {
+        if(isNull()) return;
         double n = norm();
         x /= n;
         y /= n;
@@ -141,25 +143,40 @@ class Entity : public Point {
 protected:
     int radius;
     int vx, vy;
+    int angle;
 public:
-    Entity(int x, int y, int radius) : Point(x, y), radius(radius), vx(0), vy(0) {}
+    Entity(int x, int y, int radius) : Point(x, y), radius(radius), vx(0), vy(0), angle(0) {}
     Entity() : Entity(0, 0, 0) {}
     
-    void applySpeed() {
-        x += vx;
-        y += vy;
+    void applySpeed(int acc) {
+        // Calcul du vecteur direction à partir de l'angle
+        int headingAngle = degToRad(angle);
+        Vector heading(cos(headingAngle), sin(headingAngle));
+        heading.normalize();
+        // Application de l'accélération et de la vitesse
+        x += acc*heading.x + vx;
+        y += acc*heading.y + vy;
         // Application de la friction
         vx *= .85;
         vy *= .85;
     }
     
+    // Simule approximativement un certain nombre de tours pour prédire la position de l'entité
+    Point predictPosition(int turns) const {
+        Entity predict(*this);
+        for(int i = 0; i < turns; i++)
+            predict.applySpeed(100);
+        return predict;
+    }
+    
+    // Simule approximativement un certain nombre de tours pour prédire une collision entre deux entité
     static bool predictCollision(const Entity& e1, const Entity& e2, int turns) {
         Entity e1_c(e1),
                e2_c(e2);
         for(int i = 0; i < turns; i++)
         {
-            e1_c.applySpeed();
-            e2_c.applySpeed();
+            e1_c.applySpeed(100);
+            e2_c.applySpeed(100);
             if(e1_c.distance(e2_c) <= e1_c.radius + e2_c.radius)
                 return true;
         }
@@ -247,8 +264,7 @@ Map* Map::instance = nullptr;
 
 class Pod : public Entity {
 private:
-    int angle, 
-        nextCheckPointId,
+    int nextCheckPointId,
         lastCheckPointId,
         checkpointsPassed;
         
@@ -257,6 +273,7 @@ private:
     Pod *buddy;
         
 public:
+    static constexpr int maxThrust = 100;
     static constexpr int forcefieldRadius = 400;
     static constexpr double slowdownMult = .0833;
     static constexpr int BOOST = -1, SHIELD = -2;
@@ -264,7 +281,6 @@ public:
     static constexpr double anticipationFactor = 5, compensationFactor = 3;
 
     Pod() : Entity(0, 0, forcefieldRadius),
-            angle(0),
             nextCheckPointId(0),
             boostUsed(false),
             buddy(nullptr)
@@ -272,13 +288,16 @@ public:
                 lastCheckPointId = 0;
                 checkpointsPassed = 0;
             }
-            
+    
+    // Permet de déterminer qui, entre deux pods, est devant l'autre dans la course
     bool isAhead(const Pod& other) const {
         const Checkpoint& nextCheckpointPod = Map::getInstance()->getCheckpoint(nextCheckPointId);
         const Checkpoint& nextCheckpointOther = Map::getInstance()->getCheckpoint(other.nextCheckPointId);
         
+        // Compare la distance au prochain checkpoint s'ils ont tous les deux passé le même nombre de checkpoints
         if(checkpointsPassed == other.checkpointsPassed)
             return this->distanceSq(nextCheckpointPod) < other.distanceSq(nextCheckpointOther);
+        // Sinon compare le nombre de checkpoints passés
         return checkpointsPassed > other.checkpointsPassed;
     }
     
@@ -339,19 +358,20 @@ public:
             }
         }
         else if(behavior == ATTACK) {
-            // Le pod d'attaque vise le pod ennemi en tête afin de tenter de le ralentir par des collisions
-            if(opp2.isAhead(opp1))
-                target = Vector(*this, opp2) + 3*compensationFactor*Vector(opp2.vx, opp2.vy);
-            else
-                target = Vector(*this, opp1) + 3*compensationFactor*Vector(opp1.vx, opp1.vy);
+            // Le pod d'attaque tente d'intercepter le pod ennemi en tête en prédisant sa position
+            Pod& targetPod = opp2.isAhead(opp1) ? opp2 : opp1;
+            Point predictedPos = targetPod.predictPosition(7);
+            target = Vector(*this, predictedPos) - 2*compensationFactor*v;
             
             // Activation du bouclier si prédiction de collision iminente
             if(predictCollision(*this, opp1, 1) || predictCollision(*this, opp2, 1))
                 thrust = SHIELD;
+            if(predictCollision(*this, *buddy, 5))
+                thrust = 1;
         }
         
         // Calcul de l'angle entre le pod et la cible
-        if(!thrust) {
+        if(thrust == 0) {
             double angleTargetH = radToDeg(acos(target.x / target.norm()));
             if(target.y < 0) angleTargetH = 360. - angleTargetH;
             if(angle <= angleTargetH) angleTargetH = angleTargetH - angle;
@@ -360,16 +380,16 @@ public:
             if(cos(degToRad(angleTargetH)) < -.1)
                 thrust = 0;
             else
-                thrust = min(100, max(0, (int)(slowdownMult*distToChkpt)));
-        }
-        
-        // Vérification de la position du pod allié
-        posToAlly = Vector(*this, *buddy);
-        double distToAlly = posToAlly.norm(), distToTarget = target.norm();
-        double cosAllyTarget = posToAlly.dot(target)/(distToAlly*distToTarget);
-        if(distToAlly < 2*forcefieldRadius + 300 && cosAllyTarget > .5)
-        {
-            thrust *= .25;
+                thrust = min(maxThrust, max(0, (int)(slowdownMult*distToChkpt)));
+                
+            // Ralenti si un allié est proche devant
+            posToAlly = Vector(*this, *buddy);
+            double distToAlly = posToAlly.norm(), distToTarget = target.norm();
+            double cosAllyTarget = posToAlly.dot(target)/(distToAlly*distToTarget);
+            if(distToAlly < 2*forcefieldRadius + 300 && cosAllyTarget > .5)
+            {
+                thrust *= .25;
+            }
         }
         
         /* Activation du boost si:
@@ -377,9 +397,9 @@ public:
          * - Pas de collison iminente avec un autre pod
          */
         if(behavior != ATTACK && !boostUsed && distToChkpt > 4000
-        && !predictCollision(*this, *map->getOpponent1(), 1)
-        && !predictCollision(*this, *map->getOpponent2(), 1)
-        && !predictCollision(*this, *buddy, 1)) {
+        && !predictCollision(*this, *map->getOpponent1(), 2)
+        && !predictCollision(*this, *map->getOpponent2(), 2)
+        && !predictCollision(*this, *buddy, 2)) {
             thrust = BOOST;
             boostUsed = true;
         }
@@ -407,41 +427,31 @@ int main()
     cin >> laps; cin.ignore();
     int checkpointCount;
     cin >> checkpointCount; cin.ignore();
-    
         
     Pod pods[2];
     Pod opps[2];
     
     Map* mapInstance = Map::createInstance(laps, checkpointCount, pods, pods + 1, opps, opps + 1);
     
+    int checkpointX;
+    int checkpointY;
     for (int i = 0; i < checkpointCount; i++) {
-        int checkpointX;
-        int checkpointY;
         cin >> checkpointX >> checkpointY; cin.ignore();
-        
         mapInstance->addCheckpoint(checkpointX, checkpointY);
     }
 
+    int x, y;
+    int vx, vy;
+    int angle;
+    int nextCheckPointId;
     while (true) {
         for (int i = 0; i < 2; i++) {
-            int x; // x position of your pod
-            int y; // y position of your pod
-            int vx; // x speed of your pod
-            int vy; // y speed of your pod
-            int angle; // angle of your pod
-            int nextCheckPointId; // next check point id of your pod
             cin >> x >> y >> vx >> vy >> angle >> nextCheckPointId; cin.ignore();
             pods[i].input(x, y, vx, vy, angle, nextCheckPointId, &pods[1-i]);
         }
        for (int i = 0; i < 2; i++) {
-            int x2; // x position of the opponent's pod
-            int y2; // y position of the opponent's pod
-            int vx2; // x speed of the opponent's pod
-            int vy2; // y speed of the opponent's pod
-            int angle2; // angle of the opponent's pod
-            int nextCheckPointId2; // next check point id of the opponent's pod
-            cin >> x2 >> y2 >> vx2 >> vy2 >> angle2 >> nextCheckPointId2; cin.ignore();
-            opps[i].input(x2, y2, vx2, vy2, angle2, nextCheckPointId2, &opps[1-i]);
+            cin >> x >> y >> vx >> vy >> angle >> nextCheckPointId; cin.ignore();
+            opps[i].input(x, y, vx, vy, angle, nextCheckPointId, &opps[1-i]);
         } 
 
         int targetX, targetY;
